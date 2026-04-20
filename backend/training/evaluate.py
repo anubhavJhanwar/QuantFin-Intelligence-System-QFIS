@@ -114,7 +114,14 @@ def compute_all_metrics(predictions: list, references: list) -> dict:
 def generate(model, tokenizer, prompt: str, device: str) -> str:
     inputs = tokenizer(
         prompt, return_tensors="pt", truncation=True, max_length=480
-    ).to(device)
+    )
+    # Use the device of the first model parameter (handles device_map="auto")
+    try:
+        input_device = next(model.parameters()).device
+    except StopIteration:
+        input_device = torch.device(device)
+    inputs = {k: v.to(input_device) for k, v in inputs.items()}
+
     with torch.no_grad():
         out = model.generate(
             **inputs,
@@ -138,7 +145,7 @@ def run_eval(model, tokenizer, records: list, device: str, label: str,
              use_system_prompt: bool = False) -> dict:
     logger.info(f"Evaluating: {label}")
     model.eval()
-    model.to(device)
+    # Don't call .to(device) — device_map="auto" already handles placement
     preds, refs = [], []
     examples = []
 
@@ -272,14 +279,31 @@ def run_evaluation():
         tokenizer.pad_token = tokenizer.eos_token
 
     dtype = torch.float16 if device == "cuda" else torch.float32
+
+    # 4-bit quantization config — fits Phi-2 in 4GB VRAM
+    bnb_config = None
+    if device == "cuda":
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+
+    def load_base():
+        kwargs = dict(trust_remote_code=True, device_map="auto" if device == "cuda" else None)
+        if bnb_config:
+            kwargs["quantization_config"] = bnb_config
+        else:
+            kwargs["torch_dtype"] = dtype
+        return AutoModelForCausalLM.from_pretrained(BASE_MODEL, **kwargs)
+
     results = {}
 
     # 1. Base model
     logger.info("Loading base Phi-2...")
-    base_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL, torch_dtype=dtype, trust_remote_code=True,
-        device_map="auto" if device == "cuda" else None,
-    )
+    base_model = load_base()
     results["Base Phi-2"] = run_eval(base_model, tokenizer, test_data, device, "Base Phi-2")
     del base_model
     if device == "cuda":
@@ -287,10 +311,7 @@ def run_evaluation():
 
     # 2. Prompt-engineered
     logger.info("Loading prompt-engineered Phi-2...")
-    pe_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL, torch_dtype=dtype, trust_remote_code=True,
-        device_map="auto" if device == "cuda" else None,
-    )
+    pe_model = load_base()
     results["Prompt-Engineered"] = run_eval(
         pe_model, tokenizer, test_data, device, "Prompt-Engineered", use_system_prompt=True
     )
@@ -298,14 +319,10 @@ def run_evaluation():
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # 3. Fine-tuned
+    # 3. Fine-tuned — load adapter on top of 4-bit base (no merge to save VRAM)
     logger.info("Loading fine-tuned Phi-2 (QLoRA)...")
-    ft_base = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL, torch_dtype=dtype, trust_remote_code=True,
-        device_map="auto" if device == "cuda" else None,
-    )
+    ft_base = load_base()
     ft_model = PeftModel.from_pretrained(ft_base, str(MODEL_SAVE_DIR))
-    ft_model = ft_model.merge_and_unload()
     results["Fine-tuned (QLoRA)"] = run_eval(
         ft_model, tokenizer, test_data, device, "Fine-tuned (QLoRA)"
     )
