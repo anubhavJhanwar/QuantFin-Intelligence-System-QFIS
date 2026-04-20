@@ -39,7 +39,7 @@ logger.add(LOG_DIR / "evaluate.log", rotation="5 MB")
 
 BASE_MODEL = "microsoft/phi-2"
 MAX_NEW_TOKENS = 64
-MAX_EVAL_SAMPLES = 150
+MAX_EVAL_SAMPLES = 50   # 50 × 3 models on CPU ≈ 20-30 min
 
 SYSTEM_PROMPT = (
     "You are a financial analyst. Answer the question accurately "
@@ -267,8 +267,10 @@ def run_evaluation():
         logger.error("Fine-tuned model not found. Run finetune.py first.")
         sys.exit(1)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Device: {device}")
+    # Use CPU for evaluation — avoids VRAM OOM when loading 3 models sequentially
+    # CPU is slower but reliable on 4GB VRAM machines
+    device = "cpu"
+    logger.info(f"Device: {device} (CPU eval avoids VRAM OOM on 4GB GPU)")
 
     with open(DATA_DIR / "test.json", encoding="utf-8") as f:
         test_data = json.load(f)[:MAX_EVAL_SAMPLES]
@@ -278,51 +280,39 @@ def run_evaluation():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    import gc
 
-    # 4-bit quantization config — fits Phi-2 in 4GB VRAM
-    bnb_config = None
-    if device == "cuda":
-        from transformers import BitsAndBytesConfig
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
+    def load_base_cpu():
+        """Load Phi-2 in float32 on CPU — safe for sequential evaluation."""
+        return AutoModelForCausalLM.from_pretrained(
+            BASE_MODEL,
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True,
         )
 
-    def load_base():
-        kwargs = dict(trust_remote_code=True, device_map="auto" if device == "cuda" else None)
-        if bnb_config:
-            kwargs["quantization_config"] = bnb_config
-        else:
-            kwargs["torch_dtype"] = dtype
-        return AutoModelForCausalLM.from_pretrained(BASE_MODEL, **kwargs)
+    def cleanup(model):
+        del model
+        gc.collect()
 
     results = {}
 
     # 1. Base model
-    logger.info("Loading base Phi-2...")
-    base_model = load_base()
+    logger.info("Loading base Phi-2 on CPU...")
+    base_model = load_base_cpu()
     results["Base Phi-2"] = run_eval(base_model, tokenizer, test_data, device, "Base Phi-2")
-    del base_model
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    cleanup(base_model)
 
-    # 2. Prompt-engineered
-    logger.info("Loading prompt-engineered Phi-2...")
-    pe_model = load_base()
+    # 2. Prompt-engineered (same weights, different prompt)
+    logger.info("Loading prompt-engineered Phi-2 on CPU...")
+    pe_model = load_base_cpu()
     results["Prompt-Engineered"] = run_eval(
         pe_model, tokenizer, test_data, device, "Prompt-Engineered", use_system_prompt=True
     )
-    del pe_model
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    cleanup(pe_model)
 
-    # 3. Fine-tuned — load adapter on top of 4-bit base (no merge to save VRAM)
-    logger.info("Loading fine-tuned Phi-2 (QLoRA)...")
-    ft_base = load_base()
-    # Strip unknown PEFT fields for local version compatibility
+    # 3. Fine-tuned — strip unknown PEFT fields, load adapter on CPU base
+    logger.info("Loading fine-tuned Phi-2 (QLoRA) on CPU...")
     import json as _json
     cfg_path = MODEL_SAVE_DIR / "adapter_config.json"
     cfg = _json.loads(cfg_path.read_text())
@@ -330,10 +320,14 @@ def run_evaluation():
                     "layer_replication", "use_dora", "use_rslora"]:
         cfg.pop(unknown, None)
     cfg_path.write_text(_json.dumps(cfg, indent=2))
+
+    ft_base = load_base_cpu()
     ft_model = PeftModel.from_pretrained(ft_base, str(MODEL_SAVE_DIR))
+    ft_model = ft_model.merge_and_unload()  # merge LoRA into base for clean inference
     results["Fine-tuned (QLoRA)"] = run_eval(
         ft_model, tokenizer, test_data, device, "Fine-tuned (QLoRA)"
     )
+    cleanup(ft_model)
 
     # ── Output ─────────────────────────────────────────────────────────────────
     print_table(results)
