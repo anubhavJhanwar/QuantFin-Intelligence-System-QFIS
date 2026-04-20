@@ -27,11 +27,13 @@ from rouge_score import rouge_scorer as rs
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]  # backend/training/ → backend/
 DATA_DIR = ROOT / "data" / "processed"
-MODEL_SAVE_DIR = ROOT / "models" / "v1"
-RESULTS_DIR = ROOT / "data" / "processed"
-LOG_DIR = ROOT / "logs"
+if not DATA_DIR.exists():
+    DATA_DIR = ROOT.parent / "data" / "processed"
+MODEL_SAVE_DIR = ROOT.parent / "models" / "v1"
+RESULTS_DIR = DATA_DIR
+LOG_DIR = ROOT.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 logger.add(LOG_DIR / "evaluate.log", rotation="5 MB")
 

@@ -28,25 +28,29 @@ from transformers import (
 )
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]  # backend/training/ → backend/
 DATA_DIR = ROOT / "data" / "processed"
-MODEL_SAVE_DIR = ROOT / "models" / "v1"
-CHECKPOINT_DIR = ROOT / "models" / "checkpoints"
-LOG_DIR = ROOT / "logs"
+# Fallback: data might be at project root
+if not DATA_DIR.exists():
+    DATA_DIR = ROOT.parent / "data" / "processed"
+MODEL_SAVE_DIR = ROOT.parent / "models" / "v1"
+CHECKPOINT_DIR = ROOT.parent / "models" / "checkpoints"
+LOG_DIR = ROOT.parent / "logs"
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 logger.add(LOG_DIR / "finetune.log", rotation="10 MB")
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 BASE_MODEL = "microsoft/phi-2"
-MAX_SEQ_LEN = 512
-BATCH_SIZE = 2
-GRAD_ACCUM = 4          # effective batch = 8
+MAX_SEQ_LEN = 256        # halved → 4x faster per step
+BATCH_SIZE = 4           # larger batch → fewer steps
+GRAD_ACCUM = 2           # effective batch = 8
 EPOCHS = 3
 LR = 2e-4
-LORA_R = 16
-LORA_ALPHA = 32
+LORA_R = 8               # smaller r → faster, still effective
+LORA_ALPHA = 16
 LORA_DROPOUT = 0.05
+MAX_TRAIN_SAMPLES = 1400  # cap training set → ~3h on RTX 2050
 
 
 def load_split(name: str) -> list:
@@ -96,7 +100,7 @@ def get_lora_config() -> LoraConfig:
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
-        target_modules=["q_proj", "v_proj", "k_proj", "dense"],
+        target_modules=["q_proj", "v_proj"],   # fewer modules → faster
         bias="none",
         inference_mode=False,
     )
@@ -130,6 +134,9 @@ def train():
     logger.info("Loading dataset splits...")
     train_records = load_split("train")
     val_records = load_split("val")
+    # Cap to MAX_TRAIN_SAMPLES for feasible training time on RTX 2050
+    train_records = train_records[:MAX_TRAIN_SAMPLES]
+    val_records = val_records[:300]
     logger.info(f"Train: {len(train_records)} | Val: {len(val_records)}")
 
     train_ds = build_dataset(train_records, tokenizer)
