@@ -1,6 +1,6 @@
 """
 Inference service — loads fine-tuned Phi-2 once, serves forever.
-Integrates RAG retrieval before generation.
+Uses CPU offloading to handle Phi-2 (5.5GB) on 4GB VRAM RTX 2050.
 """
 
 import sys
@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 ROOT = Path(__file__).resolve().parents[3]  # backend/app/services/ → project root
 if not (ROOT / "models").exists():
@@ -19,8 +19,9 @@ MODEL_SAVE_DIR = ROOT / "models" / "v1"
 sys.path.insert(0, str(ROOT / "backend"))
 
 from rag.retriever import retrieve_and_build_prompt
+
 BASE_MODEL = "microsoft/phi-2"
-MAX_NEW_TOKENS = 128
+MAX_NEW_TOKENS = 100
 
 _model = None
 _tokenizer = None
@@ -33,42 +34,50 @@ def _load():
     if _model is not None:
         return
 
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.float16 if _device == "cuda" else torch.float32
+    has_cuda = torch.cuda.is_available()
+    _device = "cuda" if has_cuda else "cpu"
+    logger.info(f"Loading Phi-2 | CUDA: {has_cuda}")
 
-    logger.info(f"Loading tokenizer from {BASE_MODEL}...")
-    _tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
+    _tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL, trust_remote_code=True
+    )
     if _tokenizer.pad_token is None:
         _tokenizer.pad_token = _tokenizer.eos_token
 
+    # Use 4-bit quantization so Phi-2 fits in 4GB VRAM
+    if has_cuda:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        load_kwargs = dict(
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+    else:
+        load_kwargs = dict(
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+        )
+
     if (MODEL_SAVE_DIR / "adapter_config.json").exists():
         logger.info("Loading fine-tuned Phi-2 (QLoRA adapter)...")
-        base = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL, torch_dtype=dtype, trust_remote_code=True,
-            device_map="auto" if _device == "cuda" else None,
-        )
+        base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, **load_kwargs)
         _model = PeftModel.from_pretrained(base, str(MODEL_SAVE_DIR))
-        _model = _model.merge_and_unload()
         _model_type = "fine-tuned (QLoRA)"
     else:
-        logger.warning("Fine-tuned model not found. Using base Phi-2.")
-        _model = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL, torch_dtype=dtype, trust_remote_code=True,
-            device_map="auto" if _device == "cuda" else None,
-        )
-        _model_type = "base"
+        logger.info("Loading base Phi-2 (4-bit quantized)...")
+        _model = AutoModelForCausalLM.from_pretrained(BASE_MODEL, **load_kwargs)
+        _model_type = "base (4-bit)"
 
     _model.eval()
-    if _device == "cpu":
-        _model.to(_device)
     logger.info(f"Model ready: {_model_type} on {_device}")
 
 
 def answer_query(query: str, use_rag: bool = True) -> dict:
-    """
-    Answer a financial query using RAG + fine-tuned Phi-2.
-    Returns answer, sources, model_type, prompt used.
-    """
     _load()
 
     retrieved_docs = []
@@ -83,14 +92,16 @@ def answer_query(query: str, use_rag: bool = True) -> dict:
 
     inputs = _tokenizer(
         prompt, return_tensors="pt", truncation=True, max_length=480
-    ).to(_device)
+    )
+    # Move inputs to same device as model
+    if _device == "cuda":
+        inputs = {k: v.cuda() for k, v in inputs.items()}
 
     with torch.no_grad():
         out = _model.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
             do_sample=False,
-            temperature=1.0,
             repetition_penalty=1.15,
             pad_token_id=_tokenizer.eos_token_id,
             eos_token_id=_tokenizer.eos_token_id,
@@ -99,7 +110,7 @@ def answer_query(query: str, use_rag: bool = True) -> dict:
     new_tokens = out[0][inputs["input_ids"].shape[1]:]
     answer = _tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-    # Clean up answer
+    # Trim at natural sentence boundary
     for sep in ["\n\nQuestion", "\n\nContext", "\n\n"]:
         if sep in answer:
             answer = answer.split(sep)[0].strip()
