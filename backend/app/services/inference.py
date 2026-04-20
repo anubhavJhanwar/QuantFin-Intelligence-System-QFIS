@@ -66,6 +66,14 @@ def _load():
     if (MODEL_SAVE_DIR / "adapter_config.json").exists():
         logger.info("Loading fine-tuned Phi-2 (QLoRA adapter)...")
         base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, **load_kwargs)
+        # Strip unknown fields from adapter_config for older PEFT compatibility
+        import json as _json
+        cfg_path = MODEL_SAVE_DIR / "adapter_config.json"
+        cfg = _json.loads(cfg_path.read_text())
+        for unknown in ["eva_config", "lora_bias", "exclude_modules",
+                        "layer_replication", "use_dora", "use_rslora"]:
+            cfg.pop(unknown, None)
+        cfg_path.write_text(_json.dumps(cfg, indent=2))
         _model = PeftModel.from_pretrained(base, str(MODEL_SAVE_DIR))
         _model_type = "fine-tuned (QLoRA)"
     else:

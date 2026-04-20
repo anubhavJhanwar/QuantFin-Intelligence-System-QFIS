@@ -322,6 +322,14 @@ def run_evaluation():
     # 3. Fine-tuned — load adapter on top of 4-bit base (no merge to save VRAM)
     logger.info("Loading fine-tuned Phi-2 (QLoRA)...")
     ft_base = load_base()
+    # Strip unknown PEFT fields for local version compatibility
+    import json as _json
+    cfg_path = MODEL_SAVE_DIR / "adapter_config.json"
+    cfg = _json.loads(cfg_path.read_text())
+    for unknown in ["eva_config", "lora_bias", "exclude_modules",
+                    "layer_replication", "use_dora", "use_rslora"]:
+        cfg.pop(unknown, None)
+    cfg_path.write_text(_json.dumps(cfg, indent=2))
     ft_model = PeftModel.from_pretrained(ft_base, str(MODEL_SAVE_DIR))
     results["Fine-tuned (QLoRA)"] = run_eval(
         ft_model, tokenizer, test_data, device, "Fine-tuned (QLoRA)"
