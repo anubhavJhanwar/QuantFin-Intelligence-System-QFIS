@@ -12,7 +12,11 @@ import numpy as np
 from loguru import logger
 from sentence_transformers import SentenceTransformer
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]   # backend/ → project root one level up
+# Support running from either project root or backend/
+_candidate = ROOT / "data" / "processed"
+if not _candidate.exists():
+    ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "processed"
 INDEX_PATH = DATA_DIR / "faiss_index.bin"
 METADATA_PATH = DATA_DIR / "faiss_metadata.pkl"

@@ -12,9 +12,7 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     frontend_port: int = 3000
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = {"protected_namespaces": (), "env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

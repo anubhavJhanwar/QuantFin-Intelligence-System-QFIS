@@ -11,12 +11,14 @@ from loguru import logger
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[3]  # backend/app/services/ → project root
+if not (ROOT / "models").exists():
+    ROOT = ROOT.parent
+MODEL_SAVE_DIR = ROOT / "models" / "v1"
+
 sys.path.insert(0, str(ROOT / "backend"))
 
 from rag.retriever import retrieve_and_build_prompt
-
-MODEL_SAVE_DIR = ROOT / "models" / "v1"
 BASE_MODEL = "microsoft/phi-2"
 MAX_NEW_TOKENS = 128
 

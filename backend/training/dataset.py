@@ -122,17 +122,17 @@ def clean_records(records: list) -> list:
     """Remove nulls, noise, and inconsistent samples."""
     cleaned = []
     for r in records:
-        qa = r.get("qa", r)
-        question = normalize_question(qa.get("question", r.get("question", "")))
-        answer = extract_answer(qa if isinstance(qa, dict) else r)
+        # FinQA has flat structure: question, answer, pre_text, post_text, table
+        question = normalize_question(r.get("question", ""))
+        answer = normalize_answer(str(r.get("answer", "")))
         context = build_context(r)
 
         # Filter out bad samples
-        if not question or len(question) < 10:
+        if not question or len(question) < 5:
             continue
-        if not answer or answer in ("none", "n/a", "", "nan"):
+        if not answer or answer in ("none", "n/a", "", "nan", "null"):
             continue
-        if not context or len(context) < 20:
+        if not context or len(context) < 10:
             continue
 
         cleaned.append({

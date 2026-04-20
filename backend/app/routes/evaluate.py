@@ -9,7 +9,9 @@ from app.services.database import get_evaluations
 
 router = APIRouter(prefix="/api/evaluate", tags=["Evaluation"])
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[3]  # backend/app/routes/ → project root
+if not (ROOT / "data").exists():
+    ROOT = ROOT.parent
 RESULTS_PATH = ROOT / "data" / "processed" / "evaluation_results.json"
 GRAPH_PATH = ROOT / "data" / "processed" / "evaluation_comparison.png"
 
