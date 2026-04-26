@@ -17,14 +17,17 @@ env/
 .env
 .env.local
 
-# Models (large files - use git-lfs or exclude)
+# Models (large binary files — use git-lfs or store externally)
 models/v1/*.bin
 models/v1/*.safetensors
 models/v1/*.pt
+models/checkpoints/
 
 # Data
 data/raw/
 data/processed/
+backend/data/raw/
+backend/data/processed/
 
 # Logs
 logs/
@@ -43,12 +46,14 @@ frontend/build/
 .DS_Store
 Thumbs.db
 
-# Jupyter
+# Jupyter checkpoints
 .ipynb_checkpoints/
 
-# FAISS index
+# FAISS / vector index
 *.faiss
 *.index
+*.bin
+*.pkl
 
 # MongoDB
 *.db
