@@ -34,11 +34,6 @@ SYSTEM_PROMPT = (
 BOOL_MAP = {
     "true":"yes","false":"no","correct":"yes","incorrect":"no",
     "higher":"yes","lower":"no","greater":"yes","less":"no",
-}
-
-BOOL_MAP = {
-    "true":"yes","false":"no","correct":"yes","incorrect":"no",
-    "higher":"yes","lower":"no","greater":"yes","less":"no",
     "increased":"yes","decreased":"no","more":"yes","fewer":"no",
 }
 
@@ -101,12 +96,11 @@ def main():
 
     model.eval()
     label = {"base":"Base Phi-2","pe":"Prompt-Engineered","ft":"Fine-tuned (QLoRA)"}[args.model]
-    use_sys = (args.model == "pe")
 
     results = []
     for r in tqdm(test_data, desc=label):
-        ctx    = r["context"][:900]   # more context = more signal for the model
-        prefix = SYSTEM_PROMPT if use_sys else ""
+        ctx    = r["context"][:900]
+        prefix = SYSTEM_PROMPT if args.model == "pe" else ""
         prompt = f"{prefix}Context: {ctx}\n\nQuestion: {r['question']}\n\nAnswer:"
 
         dev = next(model.parameters()).device
