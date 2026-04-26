@@ -47,10 +47,10 @@ BATCH_SIZE = 4           # larger batch → fewer steps
 GRAD_ACCUM = 2           # effective batch = 8
 EPOCHS = 3
 LR = 2e-4
-LORA_R = 8               # smaller r → faster, still effective
-LORA_ALPHA = 16
+LORA_R = 16              # higher rank → more capacity
+LORA_ALPHA = 32
 LORA_DROPOUT = 0.05
-MAX_TRAIN_SAMPLES = 1400  # cap training set → ~3h on RTX 2050
+MAX_TRAIN_SAMPLES = 2500  # more samples → better generalization
 
 
 def load_split(name: str) -> list:
@@ -59,24 +59,33 @@ def load_split(name: str) -> list:
 
 
 def build_dataset(records: list, tokenizer) -> Dataset:
-    """Build tokenized HuggingFace Dataset for causal LM."""
-    texts = [
-        r["prompt"] + " " + r["completion"] + tokenizer.eos_token
-        for r in records
-    ]
-
+    """Build tokenized HuggingFace Dataset for causal LM.
+    Only the completion (answer) tokens are supervised — prompt tokens get label=-100.
+    """
     def tokenize(batch):
-        enc = tokenizer(
-            batch["text"],
-            truncation=True,
-            max_length=MAX_SEQ_LEN,
-            padding="max_length",
-        )
-        enc["labels"] = enc["input_ids"].copy()
+        prompts     = batch["prompt"]
+        completions = batch["completion"]
+
+        full_texts = [p + " " + c + tokenizer.eos_token for p, c in zip(prompts, completions)]
+        enc = tokenizer(full_texts, truncation=True, max_length=MAX_SEQ_LEN, padding="max_length")
+
+        labels = []
+        for i, (prompt, ids) in enumerate(zip(prompts, enc["input_ids"])):
+            # Find where the prompt ends so we only supervise the answer
+            prompt_ids = tokenizer(prompt, truncation=True, max_length=MAX_SEQ_LEN)["input_ids"]
+            prompt_len = len(prompt_ids)
+            label = [-100] * prompt_len + ids[prompt_len:]
+            # Pad labels to match full length
+            label = label[:MAX_SEQ_LEN]
+            label += [-100] * (MAX_SEQ_LEN - len(label))
+            labels.append(label)
+
+        enc["labels"] = labels
         return enc
 
-    ds = Dataset.from_dict({"text": texts})
-    return ds.map(tokenize, batched=True, remove_columns=["text"])
+    ds = Dataset.from_dict({"prompt": [r["prompt"] for r in records],
+                             "completion": [r["completion"] for r in records]})
+    return ds.map(tokenize, batched=True, remove_columns=["prompt", "completion"])
 
 
 def get_bnb_config() -> BitsAndBytesConfig:
@@ -100,7 +109,7 @@ def get_lora_config() -> LoraConfig:
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
-        target_modules=["q_proj", "v_proj"],   # fewer modules → faster
+        target_modules=["q_proj", "v_proj", "k_proj", "dense", "fc1", "fc2"],
         bias="none",
         inference_mode=False,
     )
