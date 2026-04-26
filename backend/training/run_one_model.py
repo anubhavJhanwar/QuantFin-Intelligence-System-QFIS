@@ -22,7 +22,7 @@ if not DATA_DIR.exists():
     DATA_DIR = ROOT.parent / "data" / "processed"
 MODEL_DIR = ROOT.parent / "models" / "v1"
 BASE_MODEL = "microsoft/phi-2"
-MAX_NEW_TOK = 30
+MAX_NEW_TOK = 50
 MAX_EVAL    = 40
 
 SYSTEM_PROMPT = (
@@ -51,9 +51,14 @@ def extract_answer(raw: str) -> str:
     if low in BOOL_MAP:
         return BOOL_MAP[low]
     # Prefer number/percentage/yes/no at start
-    m = re.match(r"^(-?\d[\d,]*\.?\d*\s*%?|\byes\b|\bno\b|\btrue\b|\bfalse\b)", raw, re.IGNORECASE)
+    m = re.match(r"^(-?\$?\s*\d[\d,]*\.?\d*\s*%?|\byes\b|\bno\b|\btrue\b|\bfalse\b)", raw, re.IGNORECASE)
     if m:
-        val = m.group(1).strip().lower()
+        val = re.sub(r"[\$,\s]", "", m.group(1)).strip().lower()
+        return BOOL_MAP.get(val, val)
+    # Search anywhere in the string for a number/percentage/yes/no
+    m = re.search(r"(-?\$?\s*\d[\d,]*\.?\d*\s*%?|\byes\b|\bno\b|\btrue\b|\bfalse\b)", raw, re.IGNORECASE)
+    if m:
+        val = re.sub(r"[\$,\s]", "", m.group(1)).strip().lower()
         return BOOL_MAP.get(val, val)
     # Take first sentence, max 10 words
     first = re.split(r"[.!?]", raw)[0].strip()
@@ -100,7 +105,7 @@ def main():
 
     results = []
     for r in tqdm(test_data, desc=label):
-        ctx    = r["context"][:500]
+        ctx    = r["context"][:900]   # more context = more signal for the model
         prefix = SYSTEM_PROMPT if use_sys else ""
         prompt = f"{prefix}Context: {ctx}\n\nQuestion: {r['question']}\n\nAnswer:"
 
