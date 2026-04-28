@@ -1,8 +1,27 @@
 import ReactMarkdown from "react-markdown";
 import { Bot, User, Zap, Database } from "lucide-react";
 
+function AnswerBlock({ label, content, accent }) {
+  return (
+    <div className={`flex-1 rounded-xl p-3 border ${accent}`}>
+      <p className={`text-xs font-semibold mb-1.5 ${accent.includes("green") ? "text-fintech-green" : "text-fintech-accent"}`}>
+        {label}
+      </p>
+      <ReactMarkdown
+        components={{
+          p: ({ children }) => <p className="mb-1 last:mb-0 text-sm text-slate-200">{children}</p>,
+          strong: ({ children }) => <strong className="text-fintech-accent font-semibold">{children}</strong>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 export default function Message({ msg }) {
   const isUser = msg.role === "user";
+  const hasComparison = !isUser && msg.base_answer;
 
   return (
     <div className={`flex gap-3 message-enter ${isUser ? "flex-row-reverse" : "flex-row"}`}>
@@ -16,15 +35,30 @@ export default function Message({ msg }) {
       </div>
 
       {/* Bubble */}
-      <div className={`max-w-[75%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
-        <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed
-          ${isUser
-            ? "bg-fintech-400 text-white rounded-tr-sm"
-            : "glass text-slate-200 rounded-tl-sm"
-          }`}>
-          {isUser ? (
+      <div className={`${isUser ? "max-w-[75%] items-end" : "w-full max-w-[90%] items-start"} flex flex-col gap-1`}>
+
+        {isUser ? (
+          <div className="px-4 py-3 rounded-2xl text-sm leading-relaxed bg-fintech-400 text-white rounded-tr-sm">
             <p>{msg.content}</p>
-          ) : (
+          </div>
+        ) : hasComparison ? (
+          /* Side-by-side comparison */
+          <div className="w-full glass rounded-2xl rounded-tl-sm p-3 flex flex-col gap-3">
+            <div className="flex gap-3">
+              <AnswerBlock
+                label="⚡ Fine-tuned (QLoRA)"
+                content={msg.content}
+                accent="border-fintech-accent/40 bg-fintech-accent/5"
+              />
+              <AnswerBlock
+                label="🔵 Base Phi-2"
+                content={msg.base_answer}
+                accent="border-fintech-green/30 bg-fintech-green/5"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="px-4 py-3 rounded-2xl text-sm leading-relaxed glass text-slate-200 rounded-tl-sm">
             <ReactMarkdown
               components={{
                 p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
@@ -36,8 +70,8 @@ export default function Message({ msg }) {
             >
               {msg.content}
             </ReactMarkdown>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Metadata */}
         {!isUser && msg.meta && (

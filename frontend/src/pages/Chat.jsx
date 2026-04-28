@@ -84,6 +84,7 @@ export default function Chat() {
           id: Date.now(),
           role: "assistant",
           content: res.answer,
+          base_answer: res.base_answer,
           sources: res.sources || [],
           meta: { model_type: res.model_type, latency_ms: res.latency_ms, rag_used: res.rag_used },
         },
