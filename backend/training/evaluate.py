@@ -30,22 +30,108 @@ BOOL_MAP = {
     "increased":"yes","decreased":"no","more":"yes","fewer":"no",
 }
 
-def normalize(text: str) -> str:
-    t = str(text).lower().strip()
-    t = re.sub(r"(\d),(\d)", r"\1\2", t)
+# Unit multipliers for converting to a canonical base unit (millions)
+UNIT_MAP = {
+    "trillion": 1_000_000, "trillions": 1_000_000,
+    "billion":  1_000,     "billions":  1_000,
+    "million":  1,         "millions":  1,
+    "thousand": 0.001,     "thousands": 0.001,
+    "k": 0.001, "m": 1, "b": 1_000, "t": 1_000_000,
+}
+
+def _to_canonical_number(t: str) -> str:
+    """
+    Convert any numeric expression to a canonical float string.
+    Handles: $5M, 5,000,000, USD 5 million, 5 billion, 5.3b, etc.
+    Returns the original string if no numeric pattern found.
+    """
+    t = t.strip()
+    # Strip currency symbols and codes
+    t = re.sub(r"(?i)^(usd|eur|gbp|inr|cad)\s*", "", t)
     t = re.sub(r"\$\s*", "", t)
-    t = re.sub(r"\s*%", "%", t)
-    t = t.translate(str.maketrans("", "", string.punctuation.replace("%","").replace(".","").replace("-","")))
-    t = re.sub(r"\s+", " ", t).strip()
-    # Map boolean synonyms
+    # Remove commas in numbers
+    t = re.sub(r"(\d),(\d)", r"\1\2", t)
+
+    # Pattern: number followed by unit (e.g. "5.3 billion", "5b", "5M")
+    m = re.match(
+        r"^(-?\d+\.?\d*)\s*(trillion|trillions|billion|billions|million|millions|thousand|thousands|[kmbt])s?\b(.*)$",
+        t, re.IGNORECASE
+    )
+    if m:
+        num   = float(m.group(1))
+        unit  = m.group(2).lower().rstrip("s")
+        rest  = m.group(3).strip()
+        mult  = UNIT_MAP.get(unit, 1)
+        val   = num * mult
+        # Format cleanly
+        result = f"{val:.4f}".rstrip("0").rstrip(".")
+        # Preserve % if it was in the rest
+        if "%" in rest:
+            result += "%"
+        return result
+
+    # Pattern: shorthand like $5M, $3.2B at end
+    m = re.match(r"^(-?\d+\.?\d*)\s*([kmbt])%?$", t, re.IGNORECASE)
+    if m:
+        num  = float(m.group(1))
+        unit = m.group(2).lower()
+        mult = UNIT_MAP.get(unit, 1)
+        val  = num * mult
+        return f"{val:.4f}".rstrip("0").rstrip(".")
+
+    return t
+
+
+def normalize(text: str) -> str:
+    # Step 1: clean escape sequences and whitespace
+    t = str(text).lower().strip()
+    t = re.sub(r"\\+n", " ", t)          # remove escaped newlines like \\n
+    t = re.sub(r"\\+t", " ", t)          # remove escaped tabs
+    t = t.strip()
+
+    # Step 2: boolean synonym mapping (before any other processing)
     if t in BOOL_MAP:
         return BOOL_MAP[t]
-    # If long text, try to extract first number or yes/no
+
+    # Step 3: normalize percentage spacing
+    t = re.sub(r"\s*%", "%", t)
+
+    # Step 4: try canonical number conversion (handles $5M, 5 billion, etc.)
+    converted = _to_canonical_number(t)
+    if converted != t:
+        # Successfully converted — normalize the result
+        t = converted
+
+    # Step 5: strip currency symbols, commas in numbers
+    t = re.sub(r"\$\s*", "", t)
+    t = re.sub(r"(\d),(\d)", r"\1\2", t)
+
+    # Step 6: strip remaining punctuation except % . -
+    t = t.translate(str.maketrans("", "", string.punctuation.replace("%","").replace(".","").replace("-","")))
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # Step 7: boolean check again after cleaning
+    if t in BOOL_MAP:
+        return BOOL_MAP[t]
+
+    # Step 8: if still long text, extract first number/yes/no
     if len(t.split()) > 3:
         m = re.search(r"(-?\d[\d]*\.?\d*\s*%?|\byes\b|\bno\b|\btrue\b|\bfalse\b)", t)
         if m:
             extracted = m.group(1).strip()
             return BOOL_MAP.get(extracted, extracted)
+
+    # Step 9: normalize float representation — remove trailing zeros
+    # e.g. "4.50" == "4.5", "93.40" == "93.4"
+    m = re.match(r"^(-?\d+\.\d+)(%?)$", t)
+    if m:
+        try:
+            val = float(m.group(1))
+            pct_suffix = m.group(2)
+            t = f"{val:.10f}".rstrip("0").rstrip(".") + pct_suffix
+        except ValueError:
+            pass
+
     return t
 
 def exact_match(p, r): return float(normalize(p) == normalize(r))

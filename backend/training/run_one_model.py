@@ -38,6 +38,8 @@ BOOL_MAP = {
 }
 
 def extract_answer(raw: str) -> str:
+    # Clean escape sequences
+    raw = re.sub(r"\\+n", " ", raw).strip()
     raw = raw.strip().split("\n")[0].strip()
     raw = re.sub(r"^answer\s*[:\-]\s*", "", raw, flags=re.IGNORECASE).strip()
     raw = re.sub(r"^the answer is\s*", "", raw, flags=re.IGNORECASE).strip()
