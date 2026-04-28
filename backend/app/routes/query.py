@@ -20,6 +20,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     answer: str
+    base_answer: str
     sources: list
     model_type: str
     rag_used: bool
@@ -52,6 +53,7 @@ async def query(req: QueryRequest):
 
     return QueryResponse(
         answer=result["answer"],
+        base_answer=result.get("base_answer", ""),
         sources=result["sources"],
         model_type=result["model_type"],
         rag_used=result["rag_used"],
